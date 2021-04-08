@@ -1,0 +1,1118 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AWS ECS Fargate cluster running a Twelve Factor app in the private subnet
+Parameters:
+  BranchName:
+    Description: CodeCommit branch name
+    Type: String
+    Default: main
+  SourceCodeS3BucketPrefix:
+    Description: Source Code Bucket Prefix
+    Type: String
+    Default: source-code-bucket-12fa
+  GitHubHost:
+    Description: GitHub Source Host
+    Type: String
+    Default: codeload.github.com
+  GitHubPath:
+    Description: GitHub Source Path
+    Type: String
+    Default: /sushanthmangalore/twelve-factor-main-app/zip/main
+  S3SourcePath: 
+    Description: S3 source zip path
+    Type: String
+    Default: /Source.zip
+  RepositoryName:
+    Description: CodeCommit repository name
+    Type: String
+    Default: twelve-factor-app
+  SourceZipKey:
+    Description: Source Zip Key
+    Type: String
+    Default: Source.zip
+  EnvironmentName:
+    Type: String
+    Default: Prod
+    Description: "Environment name"
+  ECRRepositoryName:
+    Type: String
+    Default: "twelvefactor-app-main-repo"
+    Description: "Name of the ECR repository."
+  ECSServiceName:
+    Type: String
+    Default: twelve-factor-app-service
+    Description: A name for the service
+  ECSClusterName:
+    Type: String
+    Default: twelve-factor-app
+    Description: A name for the cluster
+  ProjectName:
+    Type: String
+    Description: The name of the project.
+    Default: twelve-factor-app
+  ContainerPort:
+    Type: Number
+    Default: 80
+    Description: The port number the application inside the docker container binds to
+  ContainerCpu:
+    Type: Number
+    Default: 256
+  ContainerMemory:
+    Type: Number
+    Default: 512
+    Description: Container Memory
+  TableName:
+    Type: String
+    Default: TwelveFactorDatastore
+    Description: "DynamoDB table name"
+  Path:
+    Type: String
+    Default: "*"
+    Description: asterisk will send all load balancer traffic to this service.
+  HealthCheckPath:
+    Type: String
+    Default: "/"
+    Description: The path on the service the Healthcheck will check for HTTP 200
+  Priority:
+    Type: Number
+    Default: 1
+    Description: The priority for the routing rule 
+  DesiredCount:
+    Type: Number
+    Default: 2
+    Description: Number of copies of the task to run
+  MaximumPercent:
+    Type: Number
+    Default: 200
+    Description: Upper limit on the number of tasks in a service that are allowed in the RUNNING or PENDING state during a deployment, as a percentage of the desired number of tasks
+  MinimumHealthyPercent:
+    Type: Number
+    Default: 75
+    Description: Lower limit on the number of tasks in a service that must remain in the RUNNING state during a deployment, as a percentage of the desired number of tasks
+  ConfigApp:
+    Type: String
+    Default: TwelveFactorApplication
+    Description: Name of the AppConfig Application
+  ConfigProfile:
+    Type: String
+    Default: ProdProfile
+    Description: Name of the AppConfig Profile
+  ConfigClient:
+    Type: String
+    Default: TwelveFactorAppClient
+    Description: Name of the AppConfig Client
+Mappings:
+  SubnetCIDRBlocks:
+    VPC:
+      CIDR: "10.0.0.0/16"
+    PrivateSubnet1:
+      CIDR: "10.0.0.0/24"
+    PrivateSubnet2:
+      CIDR: "10.0.1.0/24"
+    PublicSubnet1:
+      CIDR: "10.0.2.0/24"
+    PublicSubnet2:
+      CIDR: "10.0.3.0/24"
+Resources:
+  TwelveFactorAppVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap ["SubnetCIDRBlocks", "VPC", "CIDR"]
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppVPC
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: { Ref: "AWS::Region" }
+      VpcId: !Ref TwelveFactorAppVPC
+      CidrBlock: !FindInMap ["SubnetCIDRBlocks", "PrivateSubnet1", "CIDR"]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppPrivateSubnet1
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: { Ref: "AWS::Region" }
+      VpcId: !Ref TwelveFactorAppVPC
+      CidrBlock: !FindInMap ["SubnetCIDRBlocks", "PrivateSubnet2", "CIDR"]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppPrivateSubnet2
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: { Ref: "AWS::Region" }
+      VpcId: !Ref TwelveFactorAppVPC
+      CidrBlock: !FindInMap ["SubnetCIDRBlocks", "PublicSubnet1", "CIDR"]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppPublicSubnet1
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: { Ref: "AWS::Region" }
+      VpcId: !Ref TwelveFactorAppVPC
+      CidrBlock: !FindInMap ["SubnetCIDRBlocks", "PublicSubnet2", "CIDR"]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppPublicSubnet2
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppIGW
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref TwelveFactorAppVPC
+      InternetGatewayId: !Ref InternetGateway
+  NAT1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - NATEIP1
+          - AllocationId
+      SubnetId:
+        Ref: PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppNatGateway1
+  NATEIP1:
+    DependsOn: IGWAttachment
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NATGWRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NAT1
+  NAT2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - NATEIP2
+          - AllocationId
+      SubnetId:
+        Ref: PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppNatGateway2
+  NATEIP2:
+    DependsOn: IGWAttachment
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NATGWRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NAT2
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TwelveFactorAppVPC
+      Tags:
+        - Key: Name
+          Value: TwelveFactorAppPublicRouteTable
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TwelveFactorAppVPC
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TwelveFactorAppVPC
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable1
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable2
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref ECRRepositoryName
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${ECSClusterName}-${EnvironmentName}
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Container Security Group
+      VpcId: !Ref TwelveFactorAppVPC
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ecs-tasks.amazonaws.com]
+            Action: ["sts:AssumeRole"]
+      Path: /
+      Policies:
+        - PolicyName: ecs-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ec2:AttachNetworkInterface"
+                  - "ec2:CreateNetworkInterface"
+                  - "ec2:CreateNetworkInterfacePermission"
+                  - "ec2:DeleteNetworkInterface"
+                  - "ec2:DeleteNetworkInterfacePermission"
+                  - "ec2:Describe*"
+                  - "ec2:DetachNetworkInterface"
+                  - "elasticloadbalancing:DeregisterInstancesFromLoadBalancer"
+                  - "elasticloadbalancing:DeregisterTargets"
+                  - "elasticloadbalancing:Describe*"
+                  - "elasticloadbalancing:RegisterInstancesWithLoadBalancer"
+                  - "elasticloadbalancing:RegisterTargets"
+                  - "appconfig:GetEnvironment"
+                  - "appconfig:GetHostedConfigurationVersion"
+                  - "appconfig:GetConfiguration"
+                  - "appconfig:GetApplication"
+                  - "appconfig:GetConfigurationProfile"
+                  - "dynamodb:DescribeTable"
+                  - "dynamodb:Query"
+                  - "dynamodb:Scan"
+                  - "dynamodb:GetItem"
+                  - "dynamodb:CreateBackup"
+                Resource: "*"
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ecs-tasks.amazonaws.com]
+            Action: ["sts:AssumeRole"]
+      Path: /
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  EcsSecurityGroupIngressFromPublicALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the public ALB
+      GroupId: !Ref ContainerSecurityGroup
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref ECSPublicLoadBalancerSG
+      FromPort: 80
+      ToPort: 80
+  ECSPublicLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      VpcId: !Ref TwelveFactorAppVPC
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+  ECSPublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "30"
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups: [!Ref ECSPublicLoadBalancerSG]
+      Tags:
+        - Key: "Name"
+          Value: !Sub ${ECSServiceName}:LB
+  DummyTargetGroupPublic:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref TwelveFactorAppVPC
+  ECSPublicLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref DummyTargetGroupPublic
+          Type: "forward"
+      LoadBalancerArn: !Ref "ECSPublicLoadBalancer"
+      Port: 80
+      Protocol: HTTP
+  TwelveFactorAppCWLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub TwelveFactorApp-${EnvironmentName}-service-${ECSServiceName}
+  ECSTaskDefinition:
+    DependsOn: ECRRepository
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ECSServiceName
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt "ECSTaskExecutionRole.Arn"
+      TaskRoleArn: !GetAtt "ECSTaskRole.Arn"
+      ContainerDefinitions:
+        - Name: !Ref ECSServiceName
+          Cpu: !Ref ContainerCpu
+          Memory: !Ref ContainerMemory
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepositoryName}"
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: !Sub TwelveFactorApp-${EnvironmentName}-service-${ECSServiceName}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref ECSClusterName
+          Environment: 
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: ConfigApp
+              Value: !Ref ConfigApp
+            - Name: ConfigEnv
+              Value: !Ref EnvironmentName
+            - Name: ConfigProfile
+              Value: !Ref ConfigProfile
+            - Name: ConfigClient
+              Value: !Ref ConfigClient
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: [LoadBalancerRule, CodeCommitRepo]
+    Properties:
+      ServiceName: !Ref "ECSServiceName"
+      Cluster: !Ref 'ECSCluster'
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: 2
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups: [!Ref 'ContainerSecurityGroup']
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+      TaskDefinition: !Ref "ECSTaskDefinition"
+      LoadBalancers:
+        - ContainerName: !Ref "ECSServiceName"
+          ContainerPort: 80
+          TargetGroupArn: !Ref "ECSServiceTargetGroup"
+  ECSServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 12
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      TargetType: ip
+      Name: !Ref "ECSServiceName"
+      Port: !Ref "ContainerPort"
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref TwelveFactorAppVPC
+  LoadBalancerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref ECSServiceTargetGroup
+          Type: "forward"
+      Conditions:
+        - Field: path-pattern
+          Values: [!Ref Path]
+      ListenerArn: !Ref ECSPublicLoadBalancerListener
+      Priority: !Ref Priority
+  SourceCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join
+      - "-"
+      - - !Ref SourceCodeS3BucketPrefix
+        - !Select
+          - 0
+          - !Split
+            - "-"
+            - !Select
+              - 2
+              - !Split
+                - "/"
+                - !Ref "AWS::StackId"
+  S3InitLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: s3AccessRole
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource: !Sub arn:aws:s3:::${SourceCodeS3BucketPrefix}*/* 
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: "*"
+  S3InitFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - S3InitLambdaRole
+    Properties:
+      Code:
+        ZipFile: >
+          const AWS = require("aws-sdk");
+          const cfnResponse = require("cfn-response");
+          const stream = require('stream');
+          const s3 = new AWS.S3();
+          exports.handler = function(event, context) {
+          var options = {
+              host: event.ResourceProperties.GitHubHost,
+              path: event.ResourceProperties.GitHubPath,
+              method: 'GET',
+              headers: {'user-agent': 'node.js'}
+          };
+          const https = require('https');
+          https.get(options, async function(response) {
+             const { writeStream, manager } = uploadStream({ Bucket: event.ResourceProperties.SourceCodeBucket, Key: event.ResourceProperties.SourceZipKey });
+              response.pipe(writeStream);
+              try{
+                const results = await manager.promise();
+                cfnResponse.send(event, context, "SUCCESS", {});
+              }catch(err){
+                console.log(err);
+                cfnResponse.send(event, context, "FAILED", {});
+              }            
+            }).on('error', function(e) {
+                cfnResponse.send(event, context, "FAILED", {});
+            });
+          };
+
+          const uploadStream = ({ Bucket, Key }) => {
+            const s3 = new AWS.S3();
+            const pass = new stream.PassThrough();
+            return {
+              writeStream: pass,
+              manager: s3.upload({ Bucket, Key, Body: pass })
+            };
+          } 
+      Handler: index.handler
+      Role:
+        Fn::GetAtt: [ S3InitLambdaRole , "Arn" ]
+      Runtime: nodejs12.x
+      Timeout: 60
+  InitializeS3Bucket:
+    Type: Custom::InitFunction
+    DependsOn: SourceCodeBucket
+    Properties:
+      ServiceToken:
+         Fn::GetAtt: [ S3InitFunction , "Arn" ]
+      SourceCodeBucket: !Ref SourceCodeBucket
+      GitHubHost: !Ref GitHubHost
+      GitHubPath: !Ref GitHubPath
+      SourceZipKey: !Ref SourceZipKey
+  CodeCommitRepo:
+    Type: AWS::CodeCommit::Repository
+    DependsOn: InitializeS3Bucket
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      RepositoryDescription: This is a repository for my project with code from MySourceCodeBucket.
+      Code:
+        BranchName: !Ref BranchName
+        S3: 
+          Bucket: !Ref SourceCodeBucket
+          Key: !Ref SourceZipKey
+  CodePipelineArtifactStoreBucket:
+    Type: 'AWS::S3::Bucket'
+  CodePipelineArtifactStoreBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref CodePipelineArtifactStoreBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUnEncryptedObjectUploads
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:PutObject'
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - CodePipelineArtifactStoreBucket
+                  - Arn
+                - /*
+            Condition:
+              StringNotEquals:
+                's3:x-amz-server-side-encryption': 'aws:kms'
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - CodePipelineArtifactStoreBucket
+                  - Arn
+                - /*
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+  AppPipelineCloudWatchEventRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: cwe-pipeline-execution
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'codepipeline:StartPipelineExecution'
+                Resource: !Join 
+                  - ''
+                  - - 'arn:aws:codepipeline:'
+                    - !Ref 'AWS::Region'
+                    - ':'
+                    - !Ref 'AWS::AccountId'
+                    - ':'
+                    - !Ref AppPipeline
+  AppPipelineCloudWatchEventRule:
+    Type: 'AWS::Events::Rule'
+    DependsOn: ECSService
+    Properties:
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Join 
+            - ''
+            - - 'arn:aws:codecommit:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref RepositoryName
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - main
+      Targets:
+        - Arn: !Join 
+            - ''
+            - - 'arn:aws:codepipeline:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref AppPipeline
+          RoleArn: !GetAtt 
+            - AppPipelineCloudWatchEventRole
+            - Arn
+          Id: codepipeline-AppPipeline
+  AppPipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    DependsOn: CodeCommitRepo
+    Properties:
+      Name: !Sub Twelve-Factor-App-Pipeline
+      RoleArn: !GetAtt 
+        - CodePipelineServiceRole
+        - Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                BranchName: !Ref BranchName
+                RepositoryName: !Ref RepositoryName
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: ECS
+              Configuration:
+                ClusterName: !Sub ${ECSClusterName}-${EnvironmentName}
+                ServiceName: !Ref ECSServiceName
+                FileName: images.json
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+      RoleArn: !GetAtt  CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactStoreBucket
+  CodePipelineServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: AWS-CodePipeline-Service-3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'codecommit:CancelUploadArchive'
+                  - 'codecommit:GetBranch'
+                  - 'codecommit:GetCommit'
+                  - 'codecommit:GetUploadArchiveStatus'
+                  - 'codecommit:UploadArchive'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'codedeploy:CreateDeployment'
+                  - 'codedeploy:GetApplicationRevision'
+                  - 'codedeploy:GetDeployment'
+                  - 'codedeploy:GetDeploymentConfig'
+                  - 'codedeploy:RegisterApplicationRevision'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'codebuild:BatchGetBuilds'
+                  - 'codebuild:StartBuild'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'devicefarm:ListProjects'
+                  - 'devicefarm:ListDevicePools'
+                  - 'devicefarm:GetRun'
+                  - 'devicefarm:GetUpload'
+                  - 'devicefarm:CreateUpload'
+                  - 'devicefarm:ScheduleRun'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                  - 'lambda:ListFunctions'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'elasticbeanstalk:*'
+                  - 'ec2:*'
+                  - 'elasticloadbalancing:*'
+                  - 'autoscaling:*'
+                  - 'cloudwatch:*'
+                  - 's3:*'
+                  - 'sns:*'
+                  - 'cloudformation:*'
+                  - 'rds:*'
+                  - 'sqs:*'
+                  - 'ecs:*'
+                Resource: '*'
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: ECRRepository
+    Properties:
+      Name: !Sub ${ProjectName}-Build-Package
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: twelve-factor-main-app-main/buildspec.yaml
+      Artifacts:
+        Type: CODEPIPELINE
+      Cache: 
+        Type: LOCAL
+        Modes:
+          - LOCAL_CUSTOM_CACHE
+          - LOCAL_DOCKER_LAYER_CACHE
+          - LOCAL_SOURCE_CACHE        
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:2.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: S3_BUCKET
+            Value: !Ref CodePipelineArtifactStoreBucket 
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ECRRepositoryName 
+          - Name: IMAGE_TAG
+            Value: latest
+          - Name: AWS_ACCOUNT_ID
+            Value: !Sub ${AWS::AccountId}
+          - Name: AWS_DEFAULT_REGION
+            Value: !Sub ${AWS::Region}
+          - Name: CONTAINER_NAME
+            Value: twelve-factor-app-service
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepositoryName}
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildTrustPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-Build-Package
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-Build-Package:*                  
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${CodePipelineArtifactStoreBucket}/*                  
+              - Effect: Allow
+                Action:
+                  - ecr:*
+                Resource:
+                  - "*"  
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: CloudFormationTrustPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:              
+              - Effect: Allow
+                Action:            
+                  - ec2:CreateVpc   
+                  - ec2:DescribeVpcs
+                  - ec2:DeleteVpc  
+                  - ec2:ModifyVpcAttribute              
+                  - ec2:CreateInternetGateway
+                  - ec2:DescribeInternetGateways
+                  - ec2:DeleteInternetGateway
+                  - ec2:AttachInternetGateway
+                  - ec2:DetachInternetGateway
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeAccountAttributes
+                  - ec2:CreateSubnet
+                  - ec2:DescribeSubnets
+                  - ec2:DeleteSubnet
+                  - ec2:ModifySubnetAttribute
+                  - ec2:CreateSecurityGroup 
+                  - ec2:DescribeSecurityGroups 
+                  - ec2:DeleteSecurityGroup
+                  - ec2:CreateRouteTable 
+                  - ec2:DescribeRouteTables 
+                  - ec2:DeleteRouteTable 
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AssociateRouteTable 
+                  - ec2:DisassociateRouteTable
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                Resource:
+                  - "*"  
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:CreateLoadBalancer
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DeleteLoadBalancer
+                  - elasticloadbalancing:CreateTargetGroup                  
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:DescribeTargetGroups 
+                  - elasticloadbalancing:CreateListener
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:DeleteListener 
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DeleteRule
+                Resource:                 
+                 - "*"
+              - Effect: Allow
+                Action:
+                  - logs:*                  
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - ecs:CreateCluster
+                  - ecs:DescribeClusters
+                  - ecs:DeleteCluster
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:CreateService
+                  - ecs:DescribeServices
+                  - ecs:DeleteService
+                  - ecs:UpdateService
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/*
+  DynamoDBInitLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: dynamodbAccessRole
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}*
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: "*"
+  DynamoDBInitFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: >
+          const AWS = require("aws-sdk");
+          const response = require("cfn-response");
+          const docClient = new AWS.DynamoDB.DocumentClient();
+          exports.handler = function(event, context) {
+              console.log(JSON.stringify(event,null,2));
+              var params = {
+                TableName: event.ResourceProperties.DynamoTableName,
+                Item:{
+                    "Application": "TwelveFactorApp",
+                    "Name": "Twelve Factor App",
+                    "Language": "Python",
+                    "Platform": "Docker on ECS",
+                    "BgColor": "Yellow"
+                }
+            };
+          docClient.put(params, function(err, data) { if (err) {
+            response.send(event, context, "FAILED", {});
+          } else {
+            response.send(event, context, "SUCCESS", {});
+          }
+          });
+          };
+      Handler: index.handler
+      Role:
+        Fn::GetAtt: [ DynamoDBInitLambdaRole , "Arn" ]
+      Runtime: nodejs12.x
+      Timeout: 60
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "Application"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "Application"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "1"
+        WriteCapacityUnits: "1"
+      TableName: !Sub ${TableName}-${EnvironmentName}
+  InitializeDynamoDB:
+    Type: Custom::InitFunction
+    DependsOn: DynamoDBTable
+    Properties:
+      ServiceToken:
+         Fn::GetAtt: [ DynamoDBInitFunction , "Arn" ]
+      DynamoTableName: !Sub ${TableName}-${EnvironmentName}
+  TwelveFactorAppEnv:
+    Type: AWS::AppConfig::Environment
+    Properties:
+      ApplicationId: !Ref TwelveFactorApp
+      Name: !Ref EnvironmentName
+      Description: "App environment"
+      Tags:
+        - Key: Env
+          Value: !Ref EnvironmentName
+  TwelveFactorApp:
+    Type: AWS::AppConfig::Application
+    Properties:
+      Name: "TwelveFactorApplication"
+  TwelveFactorConfigProfile:
+    Type: AWS::AppConfig::ConfigurationProfile
+    Properties:
+      ApplicationId: !Ref TwelveFactorApp
+      Name: "ProdProfile"
+      LocationUri: "hosted"
+  TwelveFactorConfigVersion:
+    Type: AWS::AppConfig::HostedConfigurationVersion
+    Properties:
+      ApplicationId: !Ref TwelveFactorApp
+      ConfigurationProfileId: !Ref TwelveFactorConfigProfile
+      Description: "Hosted configuration version for the Prod Environment"
+      Content: !Sub "{
+        \"TableName\": \"${TableName}-${EnvironmentName}\"
+      }"
+      ContentType: "application/json"
+  TwelveFactorDeploymentStrategy:
+    Type: AWS::AppConfig::DeploymentStrategy
+    Properties:
+      ReplicateTo: NONE
+      DeploymentDurationInMinutes: 0
+      GrowthFactor: 100
+      Name: AllAtOnceNoBake
+      FinalBakeTimeInMinutes: 0
+  TwelveFactorDeployment:
+    Type: AWS::AppConfig::Deployment
+    Properties:
+      DeploymentStrategyId: !Ref TwelveFactorDeploymentStrategy
+      ConfigurationProfileId: !Ref TwelveFactorConfigProfile
+      EnvironmentId: !Ref TwelveFactorAppEnv
+      ConfigurationVersion: !Ref TwelveFactorConfigVersion
+      ApplicationId: !Ref TwelveFactorApp
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref ECSCluster
+  LoadBalancerDNS:
+    Description: The DNSName of the backup load balancer
+    Value: !Sub ${ECSPublicLoadBalancer.DNSName}/hello
