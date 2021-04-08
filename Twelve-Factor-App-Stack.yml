@@ -16,7 +16,7 @@ Parameters:
   GitHubPath:
     Description: GitHub Source Path
     Type: String
-    Default: /sushanthmangalore/twelve-factor-main-app/zip/main
+    Default: /aws-samples/twelve-factor-app-ecs-blog/zip/main
   S3SourcePath: 
     Description: S3 source zip path
     Type: String
