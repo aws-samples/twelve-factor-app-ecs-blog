@@ -996,7 +996,7 @@ Resources:
       Name: !Sub ${ProjectName}-Build-Package
       Source:
         Type: CODEPIPELINE
-        BuildSpec: twelve-factor-main-app-main/buildspec.yaml
+        BuildSpec: twelve-factor-app-ecs-blog-main/buildspec.yaml
       Artifacts:
         Type: CODEPIPELINE
       Cache: 
