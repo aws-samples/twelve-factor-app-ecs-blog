@@ -94,12 +94,16 @@ Parameters:
     Description: Name of the AppConfig Application
   ConfigProfile:
     Type: String
-    Default: ProdProfile
+    Default: ConfigProfile
     Description: Name of the AppConfig Profile
   ConfigClient:
     Type: String
     Default: TwelveFactorAppClient
     Description: Name of the AppConfig Client
+Conditions:
+  NeedsStaging: !Equals 
+    - !Ref EnvironmentName
+    - Prod
 Mappings:
   SubnetCIDRBlocks:
     VPC:
@@ -398,7 +402,7 @@ Resources:
   TwelveFactorAppCWLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub TwelveFactorApp-${EnvironmentName}-service-${ECSServiceName}
+      LogGroupName: !Sub TwelveFactorApp-service-${ECSServiceName}
   ECSTaskDefinition:
     DependsOn: ECRRepository
     Type: AWS::ECS::TaskDefinition
@@ -421,7 +425,7 @@ Resources:
           LogConfiguration:
             LogDriver: "awslogs"
             Options:
-              awslogs-group: !Sub TwelveFactorApp-${EnvironmentName}-service-${ECSServiceName}
+              awslogs-group: !Sub TwelveFactorApp-service-${ECSServiceName}
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: !Ref ECSClusterName
           Environment: 
@@ -482,6 +486,139 @@ Resources:
         - Field: path-pattern
           Values: [!Ref Path]
       ListenerArn: !Ref ECSPublicLoadBalancerListener
+      Priority: !Ref Priority
+  ECSClusterStaging:
+    Type: AWS::ECS::Cluster
+    Condition: NeedsStaging
+    Properties:
+      ClusterName: !Sub ${ECSClusterName}-Staging
+  ECSPublicLoadBalancerStaging:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: NeedsStaging
+    Properties:
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "30"
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups: [!Ref ECSPublicLoadBalancerSG]
+      Tags:
+        - Key: "Name"
+          Value: !Sub ${ECSServiceName}-Staging:LB
+  DummyTargetGroupPublicStaging:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: NeedsStaging
+    DependsOn: ECSPublicLoadBalancerStaging
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref TwelveFactorAppVPC
+  ECSPublicLoadBalancerListenerStaging:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: NeedsStaging
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref DummyTargetGroupPublicStaging
+          Type: "forward"
+      LoadBalancerArn: !Ref "ECSPublicLoadBalancerStaging"
+      Port: 80
+      Protocol: HTTP
+  ECSTaskDefinitionStaging:
+    DependsOn: ECRRepository
+    Condition: NeedsStaging
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ECSServiceName}-Staging
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt "ECSTaskExecutionRole.Arn"
+      TaskRoleArn: !GetAtt "ECSTaskRole.Arn"
+      ContainerDefinitions:
+        - Name: !Sub ${ECSServiceName}-Staging
+          Cpu: !Ref ContainerCpu
+          Memory: !Ref ContainerMemory
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepositoryName}"
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: !Sub TwelveFactorApp-service-${ECSServiceName}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub ${ECSClusterName}-Staging
+          Environment: 
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: ConfigApp
+              Value: !Ref ConfigApp
+            - Name: ConfigEnv
+              Value: !Ref EnvironmentName
+            - Name: ConfigProfile
+              Value: !Ref ConfigProfile
+            - Name: ConfigClient
+              Value: !Ref ConfigClient
+  ECSServiceStaging:
+    Type: AWS::ECS::Service
+    Condition: NeedsStaging
+    DependsOn: [StagingLoadBalancerRule, CodeCommitRepo]
+    Properties:
+      ServiceName: !Sub ${ECSServiceName}-Staging
+      Cluster: !Ref 'ECSClusterStaging'
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: 2
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups: [!Ref 'ContainerSecurityGroup']
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+      TaskDefinition: !Ref "ECSTaskDefinitionStaging"
+      LoadBalancers:
+        - ContainerName: !Sub ${ECSServiceName}-Staging
+          ContainerPort: 80
+          TargetGroupArn: !Ref "StagingECSServiceTargetGroup"
+  StagingECSServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: NeedsStaging
+    DependsOn: ECSPublicLoadBalancerStaging
+    Properties:
+      HealthCheckIntervalSeconds: 12
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      TargetType: ip
+      Name: !Sub ${ECSServiceName}-Stg
+      Port: !Ref "ContainerPort"
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref TwelveFactorAppVPC
+  StagingLoadBalancerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: NeedsStaging
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref StagingECSServiceTargetGroup
+          Type: "forward"
+      Conditions:
+        - Field: path-pattern
+          Values: [!Ref Path]
+      ListenerArn: !Ref ECSPublicLoadBalancerListenerStaging
       Priority: !Ref Priority
   SourceCodeBucket:
     Type: AWS::S3::Bucket
@@ -731,6 +868,38 @@ Resources:
                 - Name: SourceOutput
               OutputArtifacts:
                 - Name: BuildOutput
+        - !If 
+          - NeedsStaging
+          - Name: Staging_Deploy
+            Actions:
+              - Name: Staging_Deploy
+                ActionTypeId:
+                  Category: Deploy
+                  Owner: AWS
+                  Version: 1
+                  Provider: ECS
+                Configuration:
+                  ClusterName: !Sub ${ECSClusterName}-Staging
+                  ServiceName: !Sub ${ECSServiceName}-Staging
+                  FileName: images.json
+                InputArtifacts:
+                  - Name: BuildOutput
+                RunOrder: 1
+          - !Ref "AWS::NoValue"
+        - !If 
+          - NeedsStaging
+          - Name: Deployment_Approval
+            Actions:
+              - Name: Deployment_Approval
+                ActionTypeId:
+                  Category: Approval
+                  Owner: AWS
+                  Provider: Manual
+                  Version: '1'
+                InputArtifacts: []
+                Name: ProvideApproval
+                RunOrder: 1
+          - !Ref "AWS::NoValue"
         - Name: Deploy
           Actions:
             - Name: Deploy
@@ -1029,7 +1198,7 @@ Resources:
                     "Name": "Twelve Factor App",
                     "Language": "Python",
                     "Platform": "Docker on ECS",
-                    "BgColor": "Yellow"
+                    "BgColor": "Blue"
                 }
             };
           docClient.put(params, function(err, data) { if (err) {
@@ -1057,6 +1226,20 @@ Resources:
         ReadCapacityUnits: "1"
         WriteCapacityUnits: "1"
       TableName: !Sub ${TableName}-${EnvironmentName}
+  DynamoDBTableStaging:
+    Type: AWS::DynamoDB::Table
+    Condition: NeedsStaging
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "Application"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "Application"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "1"
+        WriteCapacityUnits: "1"
+      TableName: !Sub ${TableName}-Staging
   InitializeDynamoDB:
     Type: Custom::InitFunction
     DependsOn: DynamoDBTable
@@ -1064,6 +1247,14 @@ Resources:
       ServiceToken:
          Fn::GetAtt: [ DynamoDBInitFunction , "Arn" ]
       DynamoTableName: !Sub ${TableName}-${EnvironmentName}
+  InitializeDynamoDBStaging:
+    Type: Custom::InitFunction
+    Condition: NeedsStaging
+    DependsOn: DynamoDBTable
+    Properties:
+      ServiceToken:
+         Fn::GetAtt: [ DynamoDBInitFunction , "Arn" ]
+      DynamoTableName: !Sub ${TableName}-Staging
   TwelveFactorAppEnv:
     Type: AWS::AppConfig::Environment
     Properties:
@@ -1073,6 +1264,16 @@ Resources:
       Tags:
         - Key: Env
           Value: !Ref EnvironmentName
+  TwelveFactorAppEnvStaging:
+    Type: AWS::AppConfig::Environment
+    Condition: NeedsStaging
+    Properties:
+      ApplicationId: !Ref TwelveFactorApp
+      Name: Staging
+      Description: "App environment"
+      Tags:
+        - Key: Env
+          Value: Staging
   TwelveFactorApp:
     Type: AWS::AppConfig::Application
     Properties:
@@ -1081,7 +1282,7 @@ Resources:
     Type: AWS::AppConfig::ConfigurationProfile
     Properties:
       ApplicationId: !Ref TwelveFactorApp
-      Name: "ProdProfile"
+      Name: !Ref ConfigProfile
       LocationUri: "hosted"
   TwelveFactorConfigVersion:
     Type: AWS::AppConfig::HostedConfigurationVersion
@@ -1091,6 +1292,17 @@ Resources:
       Description: "Hosted configuration version for the Prod Environment"
       Content: !Sub "{
         \"TableName\": \"${TableName}-${EnvironmentName}\"
+      }"
+      ContentType: "application/json"
+  TwelveFactorConfigVersionStaging:
+    Type: AWS::AppConfig::HostedConfigurationVersion
+    Condition: NeedsStaging
+    Properties:
+      ApplicationId: !Ref TwelveFactorApp
+      ConfigurationProfileId: !Ref TwelveFactorConfigProfile
+      Description: "Hosted configuration version for the Prod Environment"
+      Content: !Sub "{
+        \"TableName\": \"${TableName}-Staging\"
       }"
       ContentType: "application/json"
   TwelveFactorDeploymentStrategy:
@@ -1108,6 +1320,15 @@ Resources:
       ConfigurationProfileId: !Ref TwelveFactorConfigProfile
       EnvironmentId: !Ref TwelveFactorAppEnv
       ConfigurationVersion: !Ref TwelveFactorConfigVersion
+      ApplicationId: !Ref TwelveFactorApp
+  TwelveFactorDeploymentStaging:
+    Type: AWS::AppConfig::Deployment
+    Condition: NeedsStaging
+    Properties:
+      DeploymentStrategyId: !Ref TwelveFactorDeploymentStrategy
+      ConfigurationProfileId: !Ref TwelveFactorConfigProfile
+      EnvironmentId: !Ref TwelveFactorAppEnvStaging
+      ConfigurationVersion: !Ref TwelveFactorConfigVersionStaging
       ApplicationId: !Ref TwelveFactorApp
 Outputs:
   ClusterName:

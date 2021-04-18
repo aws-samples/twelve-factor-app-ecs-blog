@@ -41,11 +41,11 @@ def hello_world():
             TableName=TABLE_NAME,
             Key={'Application': {'S': 'TwelveFactorApp'}})
         return f"<html><body style=\"background-color"\
-            f":{response['Item']['BgColor']['S']};text-align:center\">"\
-            f"<p><strong>Hello from {response['Item']['Name']['S']}!</strong></p>"\
-            f"<p>Developed with {response['Item']['Language']['S']},"\
+            f":{response['Item']['BgColor']['S']};color:white;text-align:center\">"\
+            f"<p><strong><h1>Hello from {response['Item']['Name']['S']}!</h1></strong></p>"\
+            f"<p><h2>Developed with {response['Item']['Language']['S']},"\
             f" deployed with {response['Item']['Platform']['S']}"\
-            "</p></body></html>"
+            "</h2></p></body></html>"
     except ClientError as e:
         return response['Error']['Message']
 
