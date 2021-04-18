@@ -1198,7 +1198,7 @@ Resources:
                     "Name": "Twelve Factor App",
                     "Language": "Python",
                     "Platform": "Docker on ECS",
-                    "BgColor": "Blue"
+                    "BgColor": "Brown"
                 }
             };
           docClient.put(params, function(err, data) { if (err) {
