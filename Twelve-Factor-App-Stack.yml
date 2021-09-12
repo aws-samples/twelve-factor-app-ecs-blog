@@ -545,7 +545,7 @@ Resources:
       ExecutionRoleArn: !GetAtt "ECSTaskExecutionRole.Arn"
       TaskRoleArn: !GetAtt "ECSTaskRole.Arn"
       ContainerDefinitions:
-        - Name: !Sub ${ECSServiceName}-Staging
+        - Name: !Ref ECSServiceName
           Cpu: !Ref ContainerCpu
           Memory: !Ref ContainerMemory
           Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepositoryName}"
@@ -589,7 +589,7 @@ Resources:
             - !Ref PrivateSubnet2
       TaskDefinition: !Ref "ECSTaskDefinitionStaging"
       LoadBalancers:
-        - ContainerName: !Sub ${ECSServiceName}-Staging
+        - ContainerName: !Ref ECSServiceName
           ContainerPort: 80
           TargetGroupArn: !Ref "StagingECSServiceTargetGroup"
   StagingECSServiceTargetGroup:
@@ -897,7 +897,6 @@ Resources:
                   Provider: Manual
                   Version: '1'
                 InputArtifacts: []
-                Name: ProvideApproval
                 RunOrder: 1
           - !Ref "AWS::NoValue"
         - Name: Deploy
@@ -915,7 +914,6 @@ Resources:
               InputArtifacts:
                 - Name: BuildOutput
               RunOrder: 1
-      RoleArn: !GetAtt  CodePipelineServiceRole.Arn
       ArtifactStore:
         Type: S3
         Location: !Ref CodePipelineArtifactStoreBucket
@@ -1023,7 +1021,7 @@ Resources:
           - Name: AWS_DEFAULT_REGION
             Value: !Sub ${AWS::Region}
           - Name: CONTAINER_NAME
-            Value: twelve-factor-app-service
+            Value: !Ref ECSServiceName
           - Name: REPOSITORY_URI
             Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepositoryName}
   CodeBuildServiceRole:
